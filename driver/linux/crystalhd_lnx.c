@@ -658,6 +658,7 @@ static int __init chd_dec_pci_probe(struct pci_dev *pdev,
 
 	/* Setup adapter level lock.. */
 	spin_lock_init(&pinfo->lock);
+	spin_lock_init(&pinfo->hwio_lock);
 
 	/* setup api stuff.. */
 	rc = chd_dec_init_chdev(pinfo);

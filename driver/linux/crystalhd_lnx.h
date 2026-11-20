@@ -74,6 +74,9 @@ struct crystalhd_adp {
 	unsigned int		msi;
 
 	spinlock_t		lock;
+	/* Serialises the BCM70015's shared access windows (GISB indirect address/data pair and
+	 * the DRAM direct window): the ISR and ioctl threads both move them. */
+	spinlock_t		hwio_lock;
 
 	/* API Related */
 	int			chd_dec_major;

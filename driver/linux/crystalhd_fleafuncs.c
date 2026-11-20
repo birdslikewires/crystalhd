@@ -267,10 +267,14 @@ uint32_t crystalhd_flea_reg_rd(struct crystalhd_adp *adp, uint32_t reg_off)
 			printk("Un-expected mapped region size\n");
 			return 0;
 		}
-		regAddr = adp->i2o_addr + FLEA_GISB_INDIRECT_ADDRESS;
-		writel(reg_off | 0x10000000, regAddr);
-		regAddr = adp->i2o_addr + FLEA_GISB_INDIRECT_DATA;
-		return readl(regAddr);
+		unsigned long flags;
+		uint32_t val;
+
+		spin_lock_irqsave(&adp->hwio_lock, flags);
+		writel(reg_off | 0x10000000, adp->i2o_addr + FLEA_GISB_INDIRECT_ADDRESS);
+		val = readl(adp->i2o_addr + FLEA_GISB_INDIRECT_DATA);
+		spin_unlock_irqrestore(&adp->hwio_lock, flags);
+		return val;
 	}
 }
 
@@ -300,10 +304,49 @@ void crystalhd_flea_reg_wr(struct crystalhd_adp *adp, uint32_t reg_off, uint32_t
 			printk("Un-expected mapped region size\n");
 			return;
 		}
-		regAddr = adp->i2o_addr + FLEA_GISB_INDIRECT_ADDRESS;
-		writel(reg_off | 0x10000000, regAddr);
-		regAddr = adp->i2o_addr + FLEA_GISB_INDIRECT_DATA;
-		writel(val, regAddr);
+		unsigned long flags;
+
+		spin_lock_irqsave(&adp->hwio_lock, flags);
+		writel(reg_off | 0x10000000, adp->i2o_addr + FLEA_GISB_INDIRECT_ADDRESS);
+		writel(val, adp->i2o_addr + FLEA_GISB_INDIRECT_DATA);
+		spin_unlock_irqrestore(&adp->hwio_lock, flags);
+	}
+}
+
+/*
+ * The DRAM is reached through one 512 KB window whose base is a register, shared by the ISR and
+ * every ioctl thread. Move the window and do the access under hwio_lock, in short pieces so a
+ * firmware download (~860 KB) never holds interrupts off for long.
+ */
+#define FLEA_DRAM_CHUNK_DW 256
+static void flea_dram_access(struct crystalhd_hw *hw, uint32_t addr, uint32_t dw_cnt,
+			     uint32_t *buf, bool write)
+{
+	const uint32_t win_mask = BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK;
+	struct crystalhd_adp *adp = hw->adp;
+	unsigned long flags;
+
+	while (dw_cnt) {
+		uint32_t base = addr & win_mask;
+		uint32_t to_end = (~win_mask + 1 - (addr & ~win_mask)) / 4;	/* dwords left in window */
+		uint32_t n = min3(dw_cnt, to_end, (uint32_t)FLEA_DRAM_CHUNK_DW);
+		void __iomem *p = adp->mem_addr + (addr & ~win_mask);
+		uint32_t ix;
+
+		spin_lock_irqsave(&adp->hwio_lock, flags);
+		/* the window control register is direct mapped, so this takes no lock itself */
+		crystalhd_flea_reg_wr(adp, BCHP_MISC2_DIRECT_WINDOW_CONTROL,
+				      base | BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_ENABLE_MASK);
+		for (ix = 0; ix < n; ix++, p += 4) {
+			if (write)
+				writel(buf[ix], p);
+			else
+				buf[ix] = readl(p);
+		}
+		spin_unlock_irqrestore(&adp->hwio_lock, flags);
+		buf += n;
+		addr += n * 4;
+		dw_cnt -= n;
 	}
 }
 
@@ -322,8 +365,7 @@ void crystalhd_flea_reg_wr(struct crystalhd_adp *adp, uint32_t reg_off, uint32_t
 BC_STATUS crystalhd_flea_mem_rd(struct crystalhd_hw *hw, uint32_t start_off,
 								uint32_t dw_cnt, uint32_t *rd_buff)
 {
-	uint32_t ix = 0;
-	uint32_t addr = start_off, base;
+	uint32_t addr = start_off;
 
 	if (!hw || !rd_buff) {
 		printk(KERN_ERR "%s: Invalid arg\n", __func__);
@@ -340,20 +382,7 @@ BC_STATUS crystalhd_flea_mem_rd(struct crystalhd_hw *hw, uint32_t start_off,
 		return BC_STS_ERROR;
 	}
 
-	/* Set the base addr for the 512kb window */
-	hw->pfnWriteDevRegister(hw->adp, BCHP_MISC2_DIRECT_WINDOW_CONTROL,
-							(addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK) | BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_ENABLE_MASK);
-
-	for (ix = 0; ix < dw_cnt; ix++) {
-		rd_buff[ix] = readl(hw->adp->mem_addr + (addr & ~BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK));
-		base = addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK;
-		addr += 4; /* DWORD access at all times */
-		if (base != (addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK)) {
-			/* Set the base addr for next 512kb window */
-			hw->pfnWriteDevRegister(hw->adp, BCHP_MISC2_DIRECT_WINDOW_CONTROL,
-										(addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK) | BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_ENABLE_MASK);
-		}
-	}
+	flea_dram_access(hw, addr, dw_cnt, rd_buff, false);
 	return BC_STS_SUCCESS;
 }
 
@@ -372,8 +401,7 @@ BC_STATUS crystalhd_flea_mem_rd(struct crystalhd_hw *hw, uint32_t start_off,
 BC_STATUS crystalhd_flea_mem_wr(struct crystalhd_hw *hw, uint32_t start_off,
 								uint32_t dw_cnt, uint32_t *wr_buff)
 {
-	uint32_t ix = 0;
-	uint32_t addr = start_off, base;
+	uint32_t addr = start_off;
 	uint32_t temp;
 
 	if (!hw || !wr_buff) {
@@ -391,20 +419,7 @@ BC_STATUS crystalhd_flea_mem_wr(struct crystalhd_hw *hw, uint32_t start_off,
 		return BC_STS_ERROR;
 	}
 
-	/* Set the base addr for the 512kb window */
-	hw->pfnWriteDevRegister(hw->adp, BCHP_MISC2_DIRECT_WINDOW_CONTROL,
-							(addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK) | BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_ENABLE_MASK);
-
-	for (ix = 0; ix < dw_cnt; ix++) {
-		writel(wr_buff[ix], hw->adp->mem_addr + (addr & ~BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK));
-		base = addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK;
-		addr += 4; /* DWORD access at all times */
-		if (base != (addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK)) {
-			/* Set the base addr for next 512kb window */
-			hw->pfnWriteDevRegister(hw->adp, BCHP_MISC2_DIRECT_WINDOW_CONTROL,
-									(addr & BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_BASE_ADDR_MASK) | BCHP_MISC2_DIRECT_WINDOW_CONTROL_DIRECT_WINDOW_ENABLE_MASK);
-		}
-	}
+	flea_dram_access(hw, addr, dw_cnt, wr_buff, true);
 
 	/*Dummy Read To Flush Memory Arbitrator*/
 	crystalhd_flea_mem_rd(hw, start_off, 1, &temp);
