@@ -4,6 +4,26 @@ Out-of-tree DKMS-friendly driver for the Broadcom BCM70012/BCM70015 "Crystal HD"
 hardware decoder. The tree focuses on the kernel module; older user-space samples
 and GStreamer filters now live under `archive/`.
 
+## This fork
+
+This is [twopoint71/crystalhd](https://github.com/twopoint71/crystalhd) with fixes for the BCM70015
+found while bringing it up in the OpenFrame 2, an Atom Z520 media phone with a mini PCIe slot. The
+commits after `ec67f08` are ours:
+
+- **The library** (`linux_lib/libcrystalhd`). Decoding on the BCM70015 stopped for good at a random
+  point: `txThreadProc` sized its sends by the library's own ring instead of the card's free space,
+  and the card refused every oversized send. Two smaller fixes in the same code release a lock on
+  an error path and keep sends to whole dwords until the end of the stream.
+- **The driver** (`driver/linux`). A lock around the BCM70015's shared register and memory windows,
+  which the interrupt handler and the ioctl threads used at the same time. Clock gating on by
+  default (`flea_pwm`), which keeps the chip about 20 °C cooler. A `tx_trace` parameter that logs
+  the input buffer handshake. Two fixes for current kernels.
+
+The OpenFrame builds take the library from here, in the `openframe-crystalhd` package from
+[openframe-linux](https://github.com/birdslikewires/openframe-linux), and the driver is in the
+OpenFrame kernel ([openframe-kernel](https://github.com/birdslikewires/openframe-kernel)). Neither
+uses the VA-API driver. The earlier fork of dbason's tree that lived here is on the `dbason` branch.
+
 ## Prerequisites
 
 Install your distro's kernel headers, compiler toolchain, and DKMS tooling. The
