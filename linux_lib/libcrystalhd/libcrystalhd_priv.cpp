@@ -2518,7 +2518,11 @@ void * txThreadProc(void *ctx)
 	{
 		// First check the status of the HW
 		// Get the real HW free size and also mark as we want TX information only
-		pStat.cpbEmptySize = 0x60000000u;
+		// Bit 31 asks DtsGetDriverStatus for the card's own free size (the firmware's
+		// DramBuffSzInBytes). The Broadcom/dbason code had (0x3 << 31), which is 0x80000000 as a
+		// 32-bit value. 0x60000000 has bit 31 clear, so the answer was the free size of the
+		// library's ring instead, and every send was sized by that.
+		pStat.cpbEmptySize = 0x80000000u;
 
 		sts = DtsGetDriverStatus(hDevice, &pStat);
 		if(sts != BC_STS_SUCCESS)
