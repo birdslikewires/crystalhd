@@ -22,7 +22,7 @@ commits after `ec67f08` are ours:
 The OpenFrame builds take the library from here, in the `openframe-crystalhd` package from
 [openframe-linux](https://github.com/birdslikewires/openframe-linux), and the driver is in the
 OpenFrame kernel ([openframe-kernel](https://github.com/birdslikewires/openframe-kernel)). Neither
-uses the VA-API driver. The earlier fork of dbason's tree that lived here is on the `dbason` branch.
+uses the VA-API driver.
 
 ## Prerequisites
 
