@@ -856,14 +856,21 @@ void crystalhd_flea_notify_fll_change(struct crystalhd_hw *hw, bool bCleanupCont
 }
 
 
+/* BCM70015 clock gating between pictures. Broadcom shipped it disabled; with it off the chip runs
+ * every clock flat out even when idle, which in a closed case (the OpenFrame 2) overheats it.
+ * It works once the library sizes its sends by the card's free space (libcrystalhd txThreadProc
+ * fix): 3 min of 720p24 then levels at about 66 C on the chip's sensor instead of about 88 C. */
+static bool flea_pwm = true;
 /* tx_trace: log every TX offer from the firmware, TX start and TX done (debugging) */
 module_param(tx_trace, bool, 0644);
 MODULE_PARM_DESC(tx_trace, "Log the BCM70015 input buffer handshake (default: off)");
+module_param(flea_pwm, bool, 0444);
+MODULE_PARM_DESC(flea_pwm, "Let the BCM70015 gate its clocks when idle (default: on)");
 
 static
 void crystalhd_flea_init_power_state(struct crystalhd_hw *hw)
 {
-	hw->FleaEnablePWM = false;	/* enable by default */
+	hw->FleaEnablePWM = flea_pwm;
 	hw->FleaPowerState = FLEA_PS_NONE;
 }
 
@@ -1092,7 +1099,7 @@ void crystalhd_flea_set_next_power_state(struct crystalhd_hw *hw,
 
 	if(hw->FleaPowerState != NextPS)
 	{
-		printk("%s:State Transition [FromSt:%x ToSt:%x] Because Of Event:%d \n",
+		pr_debug("%s:State Transition [FromSt:%x ToSt:%x] Because Of Event:%d \n",
 			__FUNCTION__,
 			hw->FleaPowerState,
 			NextPS,
