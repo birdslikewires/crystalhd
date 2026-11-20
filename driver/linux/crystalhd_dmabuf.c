@@ -8,10 +8,19 @@
 #include <linux/uaccess.h>
 #include <linux/fcntl.h>
 #include <linux/iosys-map.h>
+#include <linux/module.h>
+#include <linux/version.h>
 
 #include "crystalhd_lnx.h"
 #include "crystalhd_cmds.h"
 #include "crystalhd_dmabuf.h"
+
+/* dma_buf_* are exported in the DMA_BUF namespace; 6.13 made the name a string literal. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
+MODULE_IMPORT_NS(DMA_BUF);
+#endif
 
 #define CHD_DMABUF_ALIGN	64U
 #define CHD_DMABUF_NAME	"crystalhd-rx"
