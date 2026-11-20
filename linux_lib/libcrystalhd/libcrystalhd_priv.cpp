@@ -2638,6 +2638,18 @@ void * txThreadProc(void *ctx)
 				szDataToSend = Ctx->circBuf.busySize;
 			else
 				szDataToSend = pStat.cpbEmptySize;
+			// The card takes whole dwords. After an odd length mid-stream the firmware's next
+			// buffer address is likely unaligned, and the driver refuses such an address for
+			// good ("DWORD UNAligned Tx Addr"). Hold the odd tail back until the end of stream.
+			if((szDataToSend & 3) && !Ctx->bEOSCheck)
+			{
+				szDataToSend &= ~3u;
+				if(szDataToSend == 0)
+				{
+					usleep(3000);
+					continue;
+				}
+			}
 			if(BC_STS_SUCCESS != txBufPop(&Ctx->circBuf, localBuffer, szDataToSend)) {
 				usleep(5 * 1000);
 				continue;
