@@ -665,7 +665,8 @@ BC_STATUS crystalhd_map_dio(struct crystalhd_adp *adp, void *ubuff,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)
 	gup_flags |= FOLL_LONGTERM;
-	res = pin_user_pages(uaddr, nr_pages, gup_flags, dio->pages);
+	/* pin_user_pages() needs mmap_lock held; the _fast variant takes it itself. */
+	res = pin_user_pages_fast(uaddr, nr_pages, gup_flags, dio->pages);
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
 	crystalhd_mmap_read_lock(current->mm);
 	res = get_user_pages(uaddr, nr_pages, gup_flags, dio->pages, NULL);
