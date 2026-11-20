@@ -40,6 +40,7 @@
 
 #define OFFSETOF(_s_, _m_) ((size_t)(unsigned long)&(((_s_ *)0)->_m_))
 
+static bool tx_trace;
 static void crystalhd_flea_core_reset(struct crystalhd_hw *hw)
 {
 	unsigned int pollCnt=0,regVal=0;
@@ -820,6 +821,11 @@ static void crystalhd_flea_update_tx_buff_info(struct crystalhd_hw *hw)
 		return;
 	}
 
+	if (tx_trace)
+		printk(KERN_INFO "chdtx offer add 0x%08x sz %u flags 0x%x hostxfer %u seq %u (had add 0x%08x sz %u)\n",
+		       TxBuffInfo.DramBuffAdd, TxBuffInfo.DramBuffSzInBytes, TxBuffInfo.Flags,
+		       TxBuffInfo.HostXferSzInBytes, TxBuffInfo.SeqNum,
+		       hw->TxFwInputBuffInfo.DramBuffAdd, hw->TxFwInputBuffInfo.DramBuffSzInBytes);
 	hw->TxFwInputBuffInfo.DramBuffAdd			= TxBuffInfo.DramBuffAdd;
 	hw->TxFwInputBuffInfo.DramBuffSzInBytes		= TxBuffInfo.DramBuffSzInBytes;
 	hw->TxFwInputBuffInfo.Flags					= TxBuffInfo.Flags;
@@ -849,6 +855,10 @@ void crystalhd_flea_notify_fll_change(struct crystalhd_hw *hw, bool bCleanupCont
 	return;
 }
 
+
+/* tx_trace: log every TX offer from the firmware, TX start and TX done (debugging) */
+module_param(tx_trace, bool, 0644);
+MODULE_PARM_DESC(tx_trace, "Log the BCM70015 input buffer handshake (default: off)");
 
 static
 void crystalhd_flea_init_power_state(struct crystalhd_hw *hw)
@@ -2168,6 +2178,9 @@ void crystalhd_flea_start_tx_dma_engine(struct crystalhd_hw *hw, uint8_t list_id
 	TX_INPUT_BUFFER_INFO	TxBuffInfo;
 	uint32_t WrAddr=0, WrSzInDWords=0;
 
+	if (tx_trace)
+		printk(KERN_INFO "chdtx start list %u to 0x%08x len %u\n", list_id,
+		       hw->TxFwInputBuffInfo.DramBuffAdd, hw->TxFwInputBuffInfo.HostXferSzInBytes);
 	hw->EmptyCnt--;
 	hw->SingleThreadAppFIFOEmpty = false;
 
@@ -2297,6 +2310,8 @@ static void crystalhd_flea_update_tx_done_to_fw(struct crystalhd_hw *hw)
 	/*Increment and Write back to same memory location. */
 	hw->pfnDevDRAMWrite(hw,	seqNumAddr, 1, &regVal);
 
+	if (tx_trace)
+		printk(KERN_INFO "chdtx done seq %u\n", seqVal);
 	regVal = hw->pfnReadDevRegister(hw->adp, INDICATE_TX_DONE_REG);
 	regVal++;
 	hw->pfnWriteDevRegister(hw->adp, INDICATE_TX_DONE_REG, regVal);
